@@ -1,4 +1,3 @@
-# MIR_Study
 import math
 import numpy as np
 from random import shuffle, randint
@@ -9,10 +8,21 @@ from scipy.io import wavfile
 
 # Python code required for MIR_Study @ NAVER corp. Copyrights: Jisu Jeon @ 26/5/2018
 
-def sgram(x, N, H, wtype):
+def sgram(x, N, H, wtype, is_abs = True, is_angle = False):
     # sgram(x,H,N,wtype) returns spectogram of a signal x given the hop size of H, windowing length of N, and
     # the type of window. A window function is first defined
-    # wtype : type of window function used. OPTIONS : "Bartlett", "Hann", "Hamming", "Blackman", "Rectangular"
+    
+    # INPUT #
+    # x: audio file of which spectogram is to be computed
+    # N: length of window function
+    # H: hop size
+    # wtype: type of window function used. OPTIONS : "Bartlett", "Hann", "Hamming", "Blackman", "Rectangular"
+    # is_abs: to check if sgram returns absolute values of the spectogram obtained. Default set to True.
+    # is_angle: to check if sgram returns phase values of the spectogram obtained. Default set to False.
+    
+    # OUTPUT #
+    # specto_abs: absolute values of the spectogram obtained.
+    # specto_phase: phase values of the spectogram obtained
     if wtype == "Rectangular":
         w = [1 for n in range(N)]
     elif wtype == "Bartlett":
@@ -33,12 +43,26 @@ def sgram(x, N, H, wtype):
     M = (len(x) - N) // H + 1
     # Any signal cut that arises when the last sampled signal does not coincide with the end of the signal will be discarded
     M2 = N//2  # Defining domain for frequency bin frame, k = 0,1,2,....,M2-1 for f = f[k]
-    specto = [[] for i in range(M)]
-    for n in range(M):
-        val = np.fft.fft([e1 * e2 for e1, e2 in zip(x[n * H:N + n * H], w)])
-        specto[n] = [abs(2*val_arg/N) ** 2 for val_arg in val[0:M2]]
+    if is_abs == True:
+        specto_abs = [[] for i in range(M)]
+    if is_angle == True:
+        specto_angle = [[] for i in range(M)]
+    if is_abs == True:
+        for n in range(M):
+            val = np.fft.fft([e1 * e2 for e1, e2 in zip(x[n * H:N + n * H], w)])
+            specto_abs[n] = [abs(2*val_arg/N) ** 2 for val_arg in val[0:M2]]
+    if is_angle == True:
+        for n in range(M):
+            val = np.fft.fft([e1 * e2 for e1, e2 in zip(x[n * H:N + n * H], w)])
+            specto_angle[n] = [np.angle(val_arg) for val_arg in val[0:M2]]
     #     specto = [list(x) for x in zip(*specto)] # transposing the matrix so that the column represents time and the row represents frequency
-    return specto
+
+    if is_abs == True and is_angle == False:
+        return specto_abs
+    if is_abs == False and is_angle == True:
+        return specto_angle
+    if is_abs == True and is_angle == True:
+        return specto_abs, specto_angle
 
 
 def sgram_lf(sgram,f_range):
@@ -59,7 +83,7 @@ def sgram_lf(sgram,f_range):
             sgram_log[n][p] = sum([sgram[n][k] for k in range(f_max_index) if Fp(p-0.5) <= f_range[k] < Fp(p+0.5)])
     return sgram_log
 
-def cgram(sgram_lff):
+def cgram(sgram_lff, normalization = "off", epsilon = 0):
     # cgram converts a log-frequency spectrum of pitch index basis into that of a chroma index for c = [0:11] given a pitch index (log-frequency spectogram -> chromatogram)
     t_max_index, p_max = np.shape(sgram_lff)
     chroma_list = [x for x in range(12)]
@@ -67,7 +91,17 @@ def cgram(sgram_lff):
     for n in range(t_max_index):
         for c in range(len(chroma_list)):
             sgram_chroma[n][c] = sum([sgram_lff[n][p] for p in range(p_max) if p % 12 == c])
-    return sgram_chroma
+    if normalization == "off":
+        return sgram_chroma
+    elif normalization == "on":
+        for n in range(t_max_index):
+            norm = np.sqrt([x^2 for x in sgram_chroma[n]])
+            for c in range(len(chroma_list)):
+                if np.abs(sgram_chroma) > epsilon:
+                    sgram_chroma[n][c] /= norm
+                else:
+                    sgram_chroma[n][c] = 1/np.sqrt(12)
+        return sgram_chroma
 
 def Fp(p):
     # Fp(f) converts pitch index into corresponding frequency
@@ -96,6 +130,9 @@ def dtw(X, Y, cost_type):
     # X = [[x_1],[x_2],...,[x_N]] in R^N x R^C  and Y = [[y_1],[y_2], ..., [y_M]] in R^M x R^C with x_i and y_j in R^C for i = 1,2,...,N and j = 1,2,...,M
     # are the matrices between which optimal warping path is to be determined
     # cost_type: type of the cost function that measure the difference between X and Y. Choose btw "L2" and "cosine_dist"
+    # Step conditions are assumed to be of order 1: (1,0), (0,1), (1,1)
+    
+    # If X and Y are column vectors,
     if np.shape(X)[0] == np.size(X):
         N = np.shape(X)[0]
         M = np.shape(Y)[0]
@@ -106,6 +143,7 @@ def dtw(X, Y, cost_type):
         else:
             print("cost_type must either be 'L2' for L2 norm or 'cosine_dist' for cosine distance")
     else:
+    # If X and Y are matrices
         N, C_X = np.shape(X)
         M, C_Y = np.shape(Y)
         if C_X != C_Y:
@@ -256,7 +294,7 @@ def power_test(fs, type, freq1=100,fc=100, bw=100):
         wavfile.write('/Users/user/Music/GarageBand/' + 'narrowband_loudness_test_1_fc=' +  str(fc) + 'Hz' + 'bw=' + str(bw) + '.wav', fs, total_sig)
         return power_proportion_db, f_domain, f_spectrum, total_sig, narrow_band_sig, sig2, zero_padding1, zero_padding2, t_total_sig
 
-    def regression(x,y):
+def regression(x,y):
     # returns linear regression of the data sat x and y
     # Input: x = independent variable, y = data set
     # Output: linear regression coefficient a, b which minimizes error y-(ax+b)
@@ -269,6 +307,7 @@ def power_test(fs, type, freq1=100,fc=100, bw=100):
     return coeff[0], coeff[1]
 
 def rectify(x):
+    # Returns only positive values of x while removing the nagative values
     rectified_x = (x+abs(x))/2
     return rectified_x
 
@@ -286,7 +325,15 @@ def wrap(x):
     return x
 
 def tempo_novelty(data, M_window, H_window, wtype, novelty_type, gamma = 1, enhanced = True):
-
+    # Returns tempo-related novelty functions.
+    # INPUT #
+    # data: audio file of which tempo is to be determined.
+    # M_window: length of the window function
+    # H_window: hop size for the window function
+    # wtype: window type. Can be chosen between "Rectangular", "Bartlett", "Hann", "Hamming", "Blackman"
+    # novelty_type: type of the novelty function to be used. Can be chosen between "energy", "energy_log", "spectral", "phase", "complex"
+    # gamma: compression constant for log-compression of spectogram which is required to compute spectral novelty function. Default set to 1.
+    # enhanced: check to enhance the spectral novelty function by suppressing undesired peaks. Default set to True.
     if wtype == "Rectangular":
         w_novelty = [1 for n in range(M_window)]
     elif wtype == "Bartlett":
@@ -340,6 +387,7 @@ def tempo_novelty(data, M_window, H_window, wtype, novelty_type, gamma = 1, enha
 
             return M, enhanced_novelty_func + [0]
         else:
+            
             return M, novelty_func + [0]
 
     elif novelty_type == "phase":
