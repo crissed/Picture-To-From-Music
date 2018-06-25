@@ -255,3 +255,121 @@ def power_test(fs, type, freq1=100,fc=100, bw=100):
         total_sig = np.array(zero_padding3 + [x for x in total_sig])
         wavfile.write('/Users/user/Music/GarageBand/' + 'narrowband_loudness_test_1_fc=' +  str(fc) + 'Hz' + 'bw=' + str(bw) + '.wav', fs, total_sig)
         return power_proportion_db, f_domain, f_spectrum, total_sig, narrow_band_sig, sig2, zero_padding1, zero_padding2, t_total_sig
+
+    def regression(x,y):
+    # returns linear regression of the data sat x and y
+    # Input: x = independent variable, y = data set
+    # Output: linear regression coefficient a, b which minimizes error y-(ax+b)
+    vec_len = len(x)
+    y = np.transpose(np.array(y))
+    A = np.array([[x[i], 1] for i in range(vec_len)])
+    ps_inv = np.matmul(np.linalg.inv(np.matmul(np.transpose(A), A)), np.transpose(A)) #Pseudo_inverse of A
+    coeff = np.matmul(ps_inv, y)
+
+    return coeff[0], coeff[1]
+
+def rectify(x):
+    rectified_x = (x+abs(x))/2
+    return rectified_x
+
+def wrap(x):
+    # Returns principal value (-pi: pi] of phase x
+    if abs(x) <= np.pi:
+        return x
+    elif abs(x) > np.pi:
+        if x < 0:
+            while abs(x) >= np.pi:
+                x += 2*np.pi
+        elif x > 0:
+            while abs(x) > np.pi:
+                x -= 2*np.pi
+    return x
+
+def tempo_novelty(data, M_window, H_window, wtype, novelty_type, gamma = 1, enhanced = True):
+
+    if wtype == "Rectangular":
+        w_novelty = [1 for n in range(M_window)]
+    elif wtype == "Bartlett":
+        w = [2 * n / M_window if 0 <= n <= math.floor(M_window / 2) else 2 - 2 * n / M_window for n in range(M_window)]
+    elif wtype == "Hann":
+        w = [0.5 - 0.5 * np.cos(2 * math.pi * n / M_window) for n in range(M_window)]
+    elif wtype == "Hamming":
+        w = [0.54 - 0.46 * np.cos(2 * math.pi * n / M_window) for n in range(M_window)]
+    elif wtype == "Blackman":
+        w = [0.42 - 0.5 * np.cos(2 * math.pi * n / M_window) + 0.08 * np.cos(4 * math.pi * n / M_window) for n in range(M_window)]
+    else:
+        print('Windowing function must either be "Bartlett", "Hann", "Hamming", "Blackman" or "Rectangular"')
+
+
+    half_M_window = M_window // 2
+    half_zero_window = [0 for i in range(half_M_window)]
+    data = half_zero_window + data
+    M = (len(data) - M_window) // H_window + 1 # Number of taps in the novelty function
+
+
+    if novelty_type == "energy":
+        E_x = [sum([np.abs((x*y))**2 for x,y in zip(data[n*H_window: n*H_window + M_window], w)]) for n in range(M)]
+
+        novelty_func = [rectify(E_x[n+1] - E_x[n]) for n in range(M-1)]
+        max_novelty = max(novelty_func)
+        novelty_func = [x/max_novelty for x in novelty_func]
+        return M, novelty_func + [0]
+
+    elif novelty_type == "energy_log":
+        E_x = [sum([np.abs((x*y)**2) for x,y in zip(data[n*H_window: n*H_window + M_window], w)]) for n in range(M)]
+        novelty_func = [rectify(np.log((E_x[n+1]+0.001)/(E_x[n]+0.001))) for n in range(M-1)]
+
+        return M, novelty_func + [0]
+
+    elif novelty_type == "spectral":
+        specto_abs = sgram(data, M_window, H_window, wtype)
+        time_index_max, freq_index_max = np.shape(specto_abs)
+        specto_log = [[np.log(1+gamma*abs(specto_abs[n][k])) for k in range(freq_index_max)] for n in range(time_index_max)]
+        novelty_func = [ sum([rectify(x - y) for x,y in zip(specto_log[n+1],specto_log[n])]) for n in range(time_index_max - 1) ]
+        max_novelty = max(novelty_func)
+        novelty_func = [x / max_novelty for x in novelty_func]
+        if enhanced == True:
+            window_size = int(np.floor(M_window/len(data) * time_index_max))
+            half_window_size_lower = int(window_size//2)
+            half_window_size_upper = int(window_size//2 + window_size%2)
+            zero_padded_novelty_func = [0 for i in range(half_window_size_lower)] + novelty_func + [0 for i in range(half_window_size_upper)]
+            norm_novelty = [ 1/window_size*sum([zero_padded_novelty_func[n + m] for m in range(window_size)]) for n in range(len(novelty_func))]
+            enhanced_novelty_func = [rectify(novelty_func[n] - norm_novelty[n]) for n in range(time_index_max - 1)]
+            max_enhanced_novelty = max(enhanced_novelty_func)
+            enhanced_novelty_func = [x / max_enhanced_novelty for x in enhanced_novelty_func]
+
+            return M, enhanced_novelty_func + [0]
+        else:
+            return M, novelty_func + [0]
+
+    elif novelty_type == "phase":
+        specto_phase = sgram(data, M_window, H_window, wtype, is_abs = False, is_angle = True)
+        time_index_max, freq_index_max = np.shape(specto_phase)
+        phase_diff = [[specto_phase[n+1][k] - 2 * specto_phase[n][k] + specto_phase[n-1][k] for k in range(freq_index_max)] for n in range(1, time_index_max-1)]
+        novelty_phase = [ 1/np.pi*wrap(abs(sum(phase_diff[n]))) for n in range(time_index_max-2) ]
+        max_novelty = max(novelty_phase)
+        novelty_phase = [x / max_novelty for x in novelty_phase]
+        return M, [0] + novelty_phase + [0]
+
+    elif novelty_type == "complex":
+        specto_abs, specto_phase = sgram(data, M_window, H_window, wtype, is_abs = True, is_angle = True)
+        time_index_max, freq_index_max = np.shape(specto_phase)
+        phase_diff = [[specto_phase[n][k] - specto_phase[n-1][k] if 0 < n < time_index_max else 0 for k in range(freq_index_max)] for n in range(time_index_max)]
+        chi_hat = [[ specto_abs[n-1][k] * np.exp(2*np.pi*1j*(specto_phase[n-1][k] + phase_diff[n-1][k])) if 1 < n < time_index_max else 0 for k in range(freq_index_max)] for n in range(time_index_max)]
+        chi_dot = [[abs(chi_hat[n][k] - specto_abs[n][k]) if 1 < n < time_index_max else 0 for k in range(freq_index_max)] for n in range(time_index_max)]
+        chi_plus = [[0 for k in range(freq_index_max)] for n in range(time_index_max)]
+        for n in range(time_index_max):
+            if n < 2:
+                for k in range(freq_index_max):
+                    chi_plus[n][k] = 0
+            else:
+                for k in range(freq_index_max):
+                    if specto_abs[n][k] > specto_abs[n - 1][k]:
+                        chi_plus[n][k] = chi_dot[n][k]
+                    else:
+                        chi_plus[n][k] = 0
+        complex_novelty = [sum(chi_plus[n]) for n in range(time_index_max)]
+        max_novelty = max(complex_novelty)
+        novelty_func = [x / max_novelty for x in complex_novelty]
+        return M, novelty_func
+
